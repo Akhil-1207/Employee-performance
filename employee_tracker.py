@@ -1,27 +1,29 @@
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import uuid
+from streamlit_autorefresh import st_autorefresh
 
 # Set page configuration
 st.set_page_config(page_title="Employee Performance Dashboard", layout="wide")
-
+st.markdown("""
+    <style>
+    .main {
+        background-color: #f5f6f5;  /* Light neutral gray for a subtle, non-contrasting background */
+    }
+    </style>
+    """, unsafe_allow_html=True)
 st.title("Employee Performance Dashboard")
 st.markdown("Interactive visualizations of employee performance metrics.")
 
-@st.cache_data
-def load_data():
-    sheet_url = "https://docs.google.com/spreadsheets/d/1OxU_4C8zAp_3sqcmj2dnn4YB7N6xcI6PUPLWSG-yl4E/export?format=csv"
-    df = pd.read_csv(sheet_url)
-    return df
-
-df = load_data()
+# Load local CSV instead of Google Sheet
+df = pd.read_csv("Extended_Employee_Performance_and_Productivity_Data(with kpi).csv")
 
 # Preprocessing
-df['Hire_Date'] = pd.to_datetime(df['Hire_Date'], dayfirst=True, errors='coerce')
+df['Hire_Date'] = pd.to_datetime(df['Hire_Date'], errors='coerce')
 df['Years_At_Company'] = (pd.Timestamp.now() - df['Hire_Date']).dt.days / 365.25
 df['Performance_Level'] = df['Performance_Score'].apply(lambda x: 'Low' if x < 3 else 'Medium' if x == 3 else 'High')
+df['Satisfaction_Level'] = df['Employee_Satisfaction_Score'].apply(lambda x: 'Low' if x < 3 else 'Medium' if x == 3 else 'High')
 
 def retention_level(index):
     if index < 0.8:
@@ -45,172 +47,107 @@ df['Remote_Work_Category'] = df['Remote_Work_Frequency'].apply(remote_category)
 
 # Sidebar filters
 st.sidebar.header("Filters")
-
-# Department filter
 departments = df['Department'].dropna().unique().tolist()
-department_colors = px.colors.qualitative.Dark2[:len(departments)]
-department_color_map = dict(zip(departments, department_colors))
-
-if 'selected_department' not in st.session_state:
-    st.session_state.selected_department = departments
-
-dept_input = st.sidebar.text_input("Type Department(s) (comma-separated)", value=", ".join(st.session_state.selected_department))
-if dept_input:
-    input_depts = [d.strip() for d in dept_input.split(",") if d.strip() in departments]
-    st.session_state.selected_department = input_depts if input_depts else st.session_state.selected_department
-
-col1, col2 = st.sidebar.columns(2)
-if col1.button("Select All Departments"):
-    st.session_state.selected_department = departments
-if col2.button("Deselect All Departments"):
-    st.session_state.selected_department = []
-
-# Job title filter
 job_titles = df['Job_Title'].dropna().unique().tolist()
-job_title_colors = px.colors.qualitative.Dark24[:len(job_titles)]
-job_title_color_map = dict(zip(job_titles, job_title_colors))
+remote_options = ['All', 'Work From Home', 'Work From Office', 'Hybrid']
 
-if 'selected_job_title' not in st.session_state:
-    st.session_state.selected_job_title = job_titles
-
-job_input = st.sidebar.text_input("Type Job Title(s) (comma-separated)", value=", ".join(st.session_state.selected_job_title))
-if job_input:
-    input_jobs = [j.strip() for j in job_input.split(",") if j.strip() in job_titles]
-    st.session_state.selected_job_title = input_jobs if input_jobs else st.session_state.selected_job_title
-
-col3, col4 = st.sidebar.columns(2)
-if col3.button("Select All Job Titles"):
-    st.session_state.selected_job_title = job_titles
-if col4.button("Deselect All Job Titles"):
-    st.session_state.selected_job_title = []
+selected_department = st.sidebar.selectbox("Select Department", ["All"] + departments)
+selected_job = st.sidebar.selectbox("Select Job Title", ["All"] + job_titles)
+selected_remote = st.sidebar.selectbox("Select Remote Work Type", remote_options)
+date_range = st.sidebar.date_input("Filter by Hire Date Range", [df['Hire_Date'].min(), df['Hire_Date'].max()])
 
 # Apply filters
-filtered_df = df[df['Department'].isin(st.session_state.selected_department) & df['Job_Title'].isin(st.session_state.selected_job_title)]
+filtered_df = df.copy()
+if selected_department != "All":
+    filtered_df = filtered_df[filtered_df['Department'] == selected_department]
+if selected_job != "All":
+    filtered_df = filtered_df[filtered_df['Job_Title'] == selected_job]
+if selected_remote != "All":
+    filtered_df = filtered_df[filtered_df['Remote_Work_Category'] == selected_remote]
+if len(date_range) == 2:
+    filtered_df = filtered_df[(filtered_df['Hire_Date'] >= pd.to_datetime(date_range[0])) &
+                              (filtered_df['Hire_Date'] <= pd.to_datetime(date_range[1]))]
+
+# Cards for Productivity and Remote Work Efficiency
+col1, col2 = st.columns(2)
+with col1:
+    st.markdown(
+        f"""
+        <div style="background-color: #f0f8ff; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+            <h3 style="margin: 0;">Average Productivity Score</h3>
+            <p style="font-size: 24px; color: #0066cc;">{filtered_df['Productivity score'].mean():.2f}</p>
+        </div>
+        """, unsafe_allow_html=True)
+with col2:
+    remote_efficiency = filtered_df.groupby('Remote_Work_Category')['Productivity score'].mean()
+    hybrid_score = remote_efficiency.get('Hybrid', 0)
+    st.markdown(
+        f"""
+        <div style="background-color: #f0f8ff; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+            <h3 style="margin: 0;">Remote Work Efficiency (Hybrid)</h3>
+            <p style="font-size: 24px; color: #0066cc;">{hybrid_score:.2f}</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 # Employee Details Table
 st.subheader("Employee Details")
-details_columns = ['Employee_ID', 'Department', 'Job_Title', 'Performance_Score', 
-                 'Employee_Satisfaction_Score', 'Productivity score', 'Remote_Work_Category']
-st.dataframe(
-    filtered_df[details_columns],
-    use_container_width=True,
-    column_config={
-        "Employee_ID": st.column_config.TextColumn("Employee ID"),
-        "Performance_Score": st.column_config.NumberColumn("Performance Score", format="%.1f"),
-        "Employee_Satisfaction_Score": st.column_config.NumberColumn("Satisfaction Score", format="%.1f"),
-        "Productivity score": st.column_config.NumberColumn("Productivity Score", format="%.2f")
-    }
-)
+details_columns = ['Employee_ID', 'Department', 'Job_Title', 'Performance_Level',
+                   'Satisfaction_Level', 'Remote_Work_Category', 'Retention_Risk_Level']
+st.dataframe(filtered_df[details_columns], use_container_width=True)
 
 # Treemap
 st.subheader("Performance Level Distribution by Job Title")
-tree_data = filtered_df.groupby(['Job_Title', 'Performance_Level']).agg({'Employee_ID': 'count'}).reset_index()
-fig_tree = px.treemap(
-    tree_data,
-    path=['Job_Title', 'Performance_Level'],
-    values='Employee_ID',
-    color='Performance_Level',
-    color_discrete_map={'Low': '#FF4040', 'Medium': '#FFA500', 'High': '#228B22'},
-    title="Click on a job title to drill down"
-)
-fig_tree.update_traces(
-    hovertemplate='%{label}<br>Count: %{value}',
-    textinfo="label+value+percent parent"
-)
+tree_data = filtered_df.groupby(['Job_Title', 'Performance_Level'])['Employee_ID'].count().reset_index()
+tree_data.rename(columns={'Employee_ID': 'Number_of_Employees'}, inplace=True)
+fig_tree = px.treemap(tree_data, path=['Job_Title', 'Performance_Level'], values='Number_of_Employees',
+                      color='Performance_Level', color_discrete_map={'Low': '#FF4040', 'Medium': '#FFA500', 'High': '#228B22'})
+fig_tree.update_traces(hovertemplate='%{label}<br>Count: %{value}', textinfo="label+value+percent parent")
 st.plotly_chart(fig_tree, use_container_width=True)
 
 # Retention Risk Bar Chart
 st.subheader("Employee Count by Retention Risk Level and Job Title")
 retention_count = filtered_df.groupby(['Job_Title', 'Retention_Risk_Level'])['Employee_ID'].count().reset_index()
-fig_ret = px.bar(
-    retention_count,
-    x='Job_Title',
-    y='Employee_ID',
-    color='Retention_Risk_Level',
-    title='Employee Count by Retention Risk Level (Click bars to filter)',
-    color_discrete_map={'Low': '#8B0000', 'Medium': '#FFA500', 'High': '#006400'}
-)
-fig_ret.update_layout(clickmode='event+select')
+retention_count.rename(columns={'Employee_ID': 'Number_of_Employees'}, inplace=True)
+fig_ret = px.bar(retention_count, x='Job_Title', y='Number_of_Employees', color='Retention_Risk_Level',
+                 color_discrete_map={'Low': '#8B0000', 'Medium': '#FFA500', 'High': '#006400'})
 st.plotly_chart(fig_ret, use_container_width=True)
 
-# Pie Chart: Remote Work with Department Filter
+# Remote Work Pie Chart
 st.subheader("Remote Work Type Distribution")
-remote_dept_filter = st.multiselect(
-    "Filter by Department for Remote Work",
-    departments,
-    default=departments,
-    key=str(uuid.uuid4())
-)
-remote_filtered_df = filtered_df[filtered_df['Department'].isin(remote_dept_filter)]
-remote_data = remote_filtered_df['Remote_Work_Category'].value_counts().reset_index()
+remote_data = filtered_df['Remote_Work_Category'].value_counts().reset_index()
 remote_data.columns = ['Remote_Work_Category', 'Count']
-fig_pie = px.pie(
-    remote_data,
-    names='Remote_Work_Category',
-    values='Count',
-    title="Remote Work Type Distribution (Hover for details)",
-    color='Remote_Work_Category',
-    color_discrete_map={'Work From Home': '#1E90FF', 'Work From Office': '#696969', 'Hybrid': '#228B22'}
-)
-fig_pie.update_traces(
-    hovertemplate='%{label}: %{value} employees (%{percent})',
-    textposition='inside',
-    textinfo='percent+label'
-)
+fig_pie = px.pie(remote_data, names='Remote_Work_Category', values='Count',
+                 color_discrete_map={'Work From Home': '#1E90FF', 'Work From Office': '#696969', 'Hybrid': '#228B22'})
+fig_pie.update_traces(hovertemplate='%{label}: %{value} employees (%{percent})', textposition='inside',
+                      textinfo='percent+label')
 st.plotly_chart(fig_pie, use_container_width=True)
 
 # Satisfaction Chart
 st.subheader("Average Employee Satisfaction by Department")
 sat_avg = filtered_df.groupby('Department')['Employee_Satisfaction_Score'].mean().reset_index()
-fig_sat = px.bar(
-    sat_avg,
-    x='Department',
-    y='Employee_Satisfaction_Score',
-    title="Average Satisfaction Score by Department",
-    color='Department',
-    color_discrete_map=department_color_map
-)
-fig_sat.update_traces(
-    hovertemplate='Department: %{x}<br>Average Satisfaction Score: %{y:.2f}',
-    marker=dict(line=dict(color='#000000', width=1))
-)
+fig_sat = px.bar(sat_avg, x='Department', y='Employee_Satisfaction_Score',
+                 title="Average Satisfaction Score by Department",
+                 color='Department',
+                 color_discrete_sequence=px.colors.qualitative.Plotly)
+fig_sat.update_traces(marker=dict(line=dict(color='#000000', width=1)))
 fig_sat.update_yaxes(range=[0, 5])
 st.plotly_chart(fig_sat, use_container_width=True)
 
-# Line Chart: Performance Over Time
+# Line Chart
 st.subheader("Performance Score Trend by Years at Company")
 filtered_df['Years_Bin'] = pd.cut(filtered_df['Years_At_Company'], bins=10).apply(lambda x: x.mid)
 trend_data = filtered_df.groupby(['Years_Bin', 'Job_Title'])['Performance_Score'].mean().reset_index()
-fig_line = px.line(
-    trend_data,
-    x='Years_Bin',
-    y='Performance_Score',
-    color='Job_Title',
-    title="Performance Score Trend Over Time (Hover for details)",
-    color_discrete_map=job_title_color_map
-)
-fig_line.update_traces(mode='lines+markers', hovertemplate='Years: %{x:.1f}<br>Score: %{y:.2f}<br>Job: %{customdata[0]}', customdata=trend_data[['Job_Title']])
+fig_line = px.line(trend_data, x='Years_Bin', y='Performance_Score', color='Job_Title')
+fig_line.update_traces(mode='lines+markers')
 st.plotly_chart(fig_line, use_container_width=True)
 
 # Productivity Chart
 st.subheader("Average Productivity Score by Job Title")
 prod_avg = filtered_df.groupby('Job_Title')['Productivity score'].mean().reset_index()
-fig_prod = px.bar(
-    prod_avg,
-    x='Job_Title',
-    y='Productivity score',
-    color='Job_Title',
-    title="Average Productivity Score by Job Title",
-    color_discrete_map=job_title_color_map
-)
-fig_prod.update_traces(
-    hovertemplate='Job Title: %{x}<br>Average Productivity: %{y:.2f}',
-    marker=dict(line=dict(color='#000000', width=1))
-)
+fig_prod = px.bar(prod_avg, x='Job_Title', y='Productivity score', color='Job_Title')
+fig_prod.update_traces(marker=dict(line=dict(color='#000000', width=1)))
 fig_prod.update_yaxes(range=[0, 2])
 st.plotly_chart(fig_prod, use_container_width=True)
 
-from streamlit_autorefresh import st_autorefresh
-
-# Auto-refresh every 60 seconds
+# Auto-refresh
 st_autorefresh(interval=60000, key="refresh")
